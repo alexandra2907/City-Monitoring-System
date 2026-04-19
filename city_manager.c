@@ -8,7 +8,6 @@
 #include <time.h>
 #include "reports.h"
 
-// Funcția care transformă biții în text (rwx)
 void mode_to_string(mode_t mode, char *str) {
     strcpy(str, "---------");
     if (mode & S_IRUSR) str[0] = 'r';
@@ -22,141 +21,162 @@ void mode_to_string(mode_t mode, char *str) {
     if (mode & S_IXOTH) str[8] = 'x';
 }
 
-// Funcția NOUĂ: Scrie în log cine și ce a făcut
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    if (sscanf(input, "%[^:]:%[^:]:%s", field, op, value) == 3) return 1;
+    return 0;
+}
+
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    if (strcmp(field, "severity") == 0) {
+        int val = atoi(value);
+        if (strcmp(op, "==") == 0) return r->severity == val;
+        if (strcmp(op, "!=") == 0) return r->severity != val;
+        if (strcmp(op, "<") == 0)  return r->severity < val;
+        if (strcmp(op, "<=") == 0) return r->severity <= val;
+        if (strcmp(op, ">") == 0)  return r->severity > val;
+        if (strcmp(op, ">=") == 0) return r->severity >= val;
+    } else if (strcmp(field, "category") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->category, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->category, value) != 0;
+    } else if (strcmp(field, "inspector") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->inspector_name, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->inspector_name, value) != 0;
+    }
+    return 0;
+}
+
 void log_operation(const char *district, const char *user, const char *role, const char *action) {
     char path[256];
     snprintf(path, sizeof(path), "%s/logged_district", district);
-    
-    // Deschidem/creăm fișierul cu permisiuni 644
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
         char buf[256];
         snprintf(buf, sizeof(buf), "%ld\t%s\t%s\t%s\n", time(NULL), user, role, action);
         write(fd, buf, strlen(buf));
         close(fd);
-        chmod(path, 0644); // Forțăm permisiunile
+        chmod(path, 0644);
     }
 }
 
-int main(int argc, char *argv[]) {
-    char *role = NULL;
-    char *user = NULL;
-    char *command = NULL;
-    char *district = NULL;
-    char *extra_arg = NULL; // Pentru ID-ul de la 'view' sau 'remove_report'
+void update_symlink(const char *district) {
+    char linkname[256], target[256];
+    snprintf(linkname, sizeof(linkname), "active_reports-%s", district);
+    snprintf(target, sizeof(target), "%s/reports.dat", district);
+    unlink(linkname);
+    symlink(target, linkname);
+}
 
-    // Parsare îmbunătățită
+int main(int argc, char *argv[]) {
+    char *role = NULL, *user = NULL, *command = NULL, *district = NULL;
+    char *conditions[10];
+    int cond_count = 0;
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--role") == 0 && i + 1 < argc) role = argv[++i];
         else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) user = argv[++i];
         else if (argv[i][0] == '-' && argv[i][1] == '-') {
-            command = argv[i] + 2; // Scoatem "--"
+            command = argv[i] + 2;
             if (i + 1 < argc) district = argv[++i];
-            if (i + 1 < argc && argv[i+1][0] != '-') extra_arg = argv[++i];
+            while (i + 1 < argc && argv[i+1][0] != '-') {
+                conditions[cond_count++] = argv[++i];
+            }
         }
     }
 
-    if (!role || !user || !command || !district) {
-        fprintf(stderr, "Usage: %s --role <role> --user <user> --<command> <district> [extra_arg]\n", argv[0]);
-        return 1;
-    }
+    if (!role || !user || !command || !district) return 1;
 
-    // Creăm folderul districtului preventiv pentru orice comandă
     mkdir(district, 0750);
     chmod(district, 0750);
 
-    // --- COMANDA ADD ---
     if (strcmp(command, "add") == 0) {
-        log_operation(district, user, role, "add"); // LOGAM ACTIUNEA
-
-        Report new_report;
-        memset(&new_report, 0, sizeof(Report));
-        
-        new_report.report_id = time(NULL);
-        strncpy(new_report.inspector_name, user, sizeof(new_report.inspector_name) - 1);
-        new_report.timestamp = time(NULL);
-
-        printf("X (Latitude): "); scanf("%f", &new_report.latitude);
-        printf("Y (Longitude): "); scanf("%f", &new_report.longitude);
-        printf("Category (road/lighting/flooding/other): "); scanf("%s", new_report.category);
-        printf("Severity level (1/2/3): "); scanf("%d", &new_report.severity);
-        
-        int c; while ((c = getchar()) != '\n' && c != EOF); 
-        printf("Description: ");
-        fgets(new_report.description, sizeof(new_report.description), stdin);
-        new_report.description[strcspn(new_report.description, "\n")] = 0;
-
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
-
-        int fd = open(filepath, O_WRONLY | O_CREAT | O_APPEND, 0664);
-        if (fd < 0) { perror("Error"); return 1; }
-        write(fd, &new_report, sizeof(Report));
+        log_operation(district, user, role, "add");
+        Report nr; memset(&nr, 0, sizeof(Report));
+        nr.report_id = (int)time(NULL);
+        strncpy(nr.inspector_name, user, 31);
+        nr.timestamp = time(NULL);
+        printf("X: "); scanf("%f", &nr.latitude);
+        printf("Y: "); scanf("%f", &nr.longitude);
+        printf("Cat: "); scanf("%s", nr.category);
+        printf("Sev: "); scanf("%d", &nr.severity);
+        int c; while ((c = getchar()) != '\n' && c != EOF);
+        printf("Desc: "); fgets(nr.description, 135, stdin);
+        nr.description[strcspn(nr.description, "\n")] = 0;
+        char fp[256]; snprintf(fp, sizeof(fp), "%s/reports.dat", district);
+        int fd = open(fp, O_WRONLY | O_CREAT | O_APPEND, 0664);
+        write(fd, &nr, sizeof(Report));
         close(fd);
-        chmod(filepath, 0664);
+        chmod(fp, 0664);
+        update_symlink(district);
         printf("OK\n");
     } 
-    // --- COMANDA LIST ---
     else if (strcmp(command, "list") == 0) {
-        log_operation(district, user, role, "list"); // LOGAM ACTIUNEA
-
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
-
+        log_operation(district, user, role, "list");
+        char fp[256]; snprintf(fp, sizeof(fp), "%s/reports.dat", district);
         struct stat st;
-        if (stat(filepath, &st) < 0) { perror("Error"); return 1; }
-
-        char perms[10];
-        mode_to_string(st.st_mode, perms);
-        char time_str[64];
-        struct tm *tm_info = localtime(&st.st_mtime);
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-
-        printf("File: %s | Perms: %s | Size: %ld bytes | Last Mod: %s\n", filepath, perms, st.st_size, time_str);
-        printf("-------------------------------------------------------------------\n");
-
-        int fd = open(filepath, O_RDONLY);
-        if (fd < 0) { perror("Error"); return 1; }
-
+        if (stat(fp, &st) < 0) { printf("No reports.\n"); return 1; }
+        char perms[10]; mode_to_string(st.st_mode, perms);
+        printf("File: %s | Perms: %s | Size: %ld\n", fp, perms, st.st_size);
+        int fd = open(fp, O_RDONLY);
         Report r;
         while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
-            printf("[%d] By: %s | Cat: %s | Sev: %d | Desc: %s\n", r.report_id, r.inspector_name, r.category, r.severity, r.description);
+            printf("[%d] %s: %s\n", r.report_id, r.category, r.description);
         }
         close(fd);
     }
-    // --- COMANDA VIEW NOUA ---
     else if (strcmp(command, "view") == 0) {
         log_operation(district, user, role, "view");
-
-        if (!extra_arg) {
-            printf("Error: Missing report ID for view command.\n");
-            return 1;
-        }
-
-        int target_id = atoi(extra_arg); // Convertim textul in numar
-        char filepath[256];
-        snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
-
-        int fd = open(filepath, O_RDONLY);
-        if (fd < 0) { perror("Error"); return 1; }
-
+        if (cond_count == 0) return 1;
+        int target = atoi(conditions[0]);
+        char fp[256]; snprintf(fp, sizeof(fp), "%s/reports.dat", district);
+        int fd = open(fp, O_RDONLY);
         Report r;
-        int found = 0;
         while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
-            if (r.report_id == target_id) {
-                printf("\n--- Report Details ---\n");
-                printf("ID: %d\nInspector: %s\nCoords: %.4f, %.4f\nCategory: %s\nSeverity: %d\nDescription: %s\n",
-                       r.report_id, r.inspector_name, r.latitude, r.longitude, r.category, r.severity, r.description);
-                found = 1;
+            if (r.report_id == target) {
+                printf("ID: %d\nInspector: %s\nCat: %s\nDesc: %s\n", r.report_id, r.inspector_name, r.category, r.description);
                 break;
             }
         }
-        if (!found) printf("Report with ID %d not found.\n", target_id);
         close(fd);
     }
-    else {
-        printf("Not implemented\n");
+    else if (strcmp(command, "filter") == 0) {
+        log_operation(district, user, role, "filter");
+        char fp[256]; snprintf(fp, sizeof(fp), "%s/reports.dat", district);
+        int fd = open(fp, O_RDONLY);
+        Report r;
+        while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+            int all_match = 1;
+            for (int i = 0; i < cond_count; i++) {
+                char f[64], o[10], v[64];
+                if (parse_condition(conditions[i], f, o, v)) {
+                    if (!match_condition(&r, f, o, v)) { all_match = 0; break; }
+                }
+            }
+            if (all_match) printf("[%d] %s: %s\n", r.report_id, r.category, r.description);
+        }
+        close(fd);
     }
-
+    else if (strcmp(command, "remove_report") == 0) {
+        if (strcmp(role, "manager") != 0) { printf("Access denied.\n"); return 1; }
+        log_operation(district, user, role, "remove");
+        int target = atoi(conditions[0]);
+        char fp[256]; snprintf(fp, sizeof(fp), "%s/reports.dat", district);
+        int fd = open(fp, O_RDWR);
+        Report r; off_t pos = 0; int found = 0;
+        while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+            if (r.report_id == target) { found = 1; break; }
+            pos += sizeof(Report);
+        }
+        if (found) {
+            off_t wp = pos;
+            while (lseek(fd, pos + sizeof(Report), SEEK_SET) >= 0 && read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+                lseek(fd, wp, SEEK_SET); write(fd, &r, sizeof(Report));
+                wp += sizeof(Report); pos += sizeof(Report);
+            }
+            ftruncate(fd, wp);
+            printf("Removed.\n");
+        }
+        close(fd);
+        update_symlink(district);
+    }
     return 0;
 }
