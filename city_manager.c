@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include "reports.h"
 
 int main(int argc, char *argv[]) {
@@ -9,30 +13,68 @@ int main(int argc, char *argv[]) {
     char *command = NULL;
     char *district = NULL;
 
-    // Parse command line arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--role") == 0 && i + 1 < argc) {
             role = argv[++i];
         } else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
             user = argv[++i];
         } else if (argv[i][0] == '-' && argv[i][1] == '-') {
-            // Check for commands like --add, --list
             command = argv[i] + 2;
-            if (i + 1 < argc) {
-                district = argv[++i];
-            }
+            if (i + 1 < argc) district = argv[++i];
         }
     }
 
     if (!role || !user || !command || !district) {
-        fprintf(stderr, "Usage: %s --role <role> --user <user> --<command> <district> [args]\n", argv[0]);
+        fprintf(stderr, "Usage: %s --role <role> --user <user> --<command> <district>\n", argv[0]);
         return 1;
     }
 
-    printf("Role: %s\n", role);
-    printf("User: %s\n", user);
-    printf("Command: %s\n", command);
-    printf("District: %s\n", district);
+    if (strcmp(command, "add") == 0) {
+        mkdir(district, 0750);
+        chmod(district, 0750);
+
+        Report new_report;
+        memset(&new_report, 0, sizeof(Report));
+        
+        new_report.report_id = time(NULL);
+        strncpy(new_report.inspector_name, user, sizeof(new_report.inspector_name) - 1);
+        new_report.timestamp = time(NULL);
+
+        printf("X (Latitude): ");
+        scanf("%f", &new_report.latitude);
+        
+        printf("Y (Longitude): ");
+        scanf("%f", &new_report.longitude);
+        
+        printf("Category (road/lighting/flooding/other): ");
+        scanf("%s", new_report.category);
+        
+        printf("Severity level (1/2/3): ");
+        scanf("%d", &new_report.severity);
+        
+        int c; while ((c = getchar()) != '\n' && c != EOF); 
+        printf("Description: ");
+        fgets(new_report.description, sizeof(new_report.description), stdin);
+        new_report.description[strcspn(new_report.description, "\n")] = 0;
+
+        char filepath[256];
+        snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
+
+        int fd = open(filepath, O_WRONLY | O_CREAT | O_APPEND, 0664);
+        if (fd < 0) {
+            perror("Error");
+            return 1;
+        }
+        
+        write(fd, &new_report, sizeof(Report));
+        close(fd);
+        chmod(filepath, 0664);
+
+        printf("OK\n");
+    } 
+    else {
+        printf("Not implemented\n");
+    }
 
     return 0;
 }
