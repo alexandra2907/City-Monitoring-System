@@ -5,7 +5,21 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include "reports.h"
+
+void mode_to_string(mode_t mode, char *str) {
+    strcpy(str, "---------");
+    if (mode & S_IRUSR) str[0] = 'r';
+    if (mode & S_IWUSR) str[1] = 'w';
+    if (mode & S_IXUSR) str[2] = 'x';
+    if (mode & S_IRGRP) str[3] = 'r';
+    if (mode & S_IWGRP) str[4] = 'w';
+    if (mode & S_IXGRP) str[5] = 'x';
+    if (mode & S_IROTH) str[6] = 'r';
+    if (mode & S_IWOTH) str[7] = 'w';
+    if (mode & S_IXOTH) str[8] = 'x';
+}
 
 int main(int argc, char *argv[]) {
     char *role = NULL;
@@ -14,11 +28,9 @@ int main(int argc, char *argv[]) {
     char *district = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--role") == 0 && i + 1 < argc) {
-            role = argv[++i];
-        } else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
-            user = argv[++i];
-        } else if (argv[i][0] == '-' && argv[i][1] == '-') {
+        if (strcmp(argv[i], "--role") == 0 && i + 1 < argc) role = argv[++i];
+        else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) user = argv[++i];
+        else if (argv[i][0] == '-' && argv[i][1] == '-') {
             command = argv[i] + 2;
             if (i + 1 < argc) district = argv[++i];
         }
@@ -40,17 +52,10 @@ int main(int argc, char *argv[]) {
         strncpy(new_report.inspector_name, user, sizeof(new_report.inspector_name) - 1);
         new_report.timestamp = time(NULL);
 
-        printf("X (Latitude): ");
-        scanf("%f", &new_report.latitude);
-        
-        printf("Y (Longitude): ");
-        scanf("%f", &new_report.longitude);
-        
-        printf("Category (road/lighting/flooding/other): ");
-        scanf("%s", new_report.category);
-        
-        printf("Severity level (1/2/3): ");
-        scanf("%d", &new_report.severity);
+        printf("X (Latitude): "); scanf("%f", &new_report.latitude);
+        printf("Y (Longitude): "); scanf("%f", &new_report.longitude);
+        printf("Category (road/lighting/flooding/other): "); scanf("%s", new_report.category);
+        printf("Severity level (1/2/3): "); scanf("%d", &new_report.severity);
         
         int c; while ((c = getchar()) != '\n' && c != EOF); 
         printf("Description: ");
@@ -61,17 +66,44 @@ int main(int argc, char *argv[]) {
         snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
 
         int fd = open(filepath, O_WRONLY | O_CREAT | O_APPEND, 0664);
-        if (fd < 0) {
-            perror("Error");
-            return 1;
-        }
-        
+        if (fd < 0) { perror("Error"); return 1; }
         write(fd, &new_report, sizeof(Report));
         close(fd);
         chmod(filepath, 0664);
 
         printf("OK\n");
     } 
+    else if (strcmp(command, "list") == 0) {
+        char filepath[256];
+        snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
+
+        struct stat st;
+        if (stat(filepath, &st) < 0) {
+            perror("Error getting file stats");
+            return 1;
+        }
+
+        char perms[10];
+        mode_to_string(st.st_mode, perms);
+        
+        char time_str[64];
+        struct tm *tm_info = localtime(&st.st_mtime);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+        printf("File: %s | Perms: %s | Size: %ld bytes | Last Mod: %s\n", 
+               filepath, perms, st.st_size, time_str);
+        printf("-------------------------------------------------------------------\n");
+
+        int fd = open(filepath, O_RDONLY);
+        if (fd < 0) { perror("Error"); return 1; }
+
+        Report r;
+        while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+            printf("[%d] By: %s | Cat: %s | Sev: %d | Desc: %s\n", 
+                   r.report_id, r.inspector_name, r.category, r.severity, r.description);
+        }
+        close(fd);
+    }
     else {
         printf("Not implemented\n");
     }
