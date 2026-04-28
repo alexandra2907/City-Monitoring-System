@@ -8,6 +8,8 @@
 #include <time.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include "reports.h"
 
 #define BUF_SIZE 300
@@ -48,8 +50,6 @@ void check_dangling_links() {
 }
 
 void log_operation(const char *district, const char *user, const char *role, const char *action) {
-    if (strcmp(role, "inspector") == 0) return;
-
     char path[256];
     snprintf(path, sizeof(path), "%s/logged_district", district);
     struct stat st;
@@ -66,6 +66,30 @@ void log_operation(const char *district, const char *user, const char *role, con
         int len = snprintf(buf, sizeof(buf), "%ld\t%s\t%s\t%s\n", time(NULL), user, role, action);
         write(fd, buf, len);
         close(fd);
+    }
+}
+
+void notify_monitor(const char *district, const char *user, const char *role) {
+    int fd = open(".monitor_pid", O_RDONLY);
+    int monitor_informed = 0;
+
+    if (fd >= 0) {
+        char pid_buf[16];
+        int br = read(fd, pid_buf, sizeof(pid_buf) - 1);
+        close(fd);
+        if (br > 0) {
+            pid_buf[br] = '\0';
+            pid_t monitor_pid = atoi(pid_buf);
+            if (kill(monitor_pid, SIGUSR1) == 0) {
+                monitor_informed = 1;
+            }
+        }
+    }
+
+    if (monitor_informed) {
+        log_operation(district, user, role, "add (Monitor notified)");
+    } else {
+        log_operation(district, user, role, "add (Monitor could not be informed)");
     }
 }
 
@@ -154,9 +178,23 @@ void execute_add(const char *district, const char *user, const char *role) {
         strncpy(nr.category, input_buf, sizeof(nr.category) - 1);
     }
 
-    prompt = "Severity: "; write(STDOUT_FILENO, prompt, strlen(prompt));
-    br = read(STDIN_FILENO, input_buf, BUF_SIZE - 1);
-    if (br > 0) { input_buf[br] = '\0'; nr.severity = atoi(input_buf); }
+    int valid_sev = 0;
+    while (!valid_sev) {
+        prompt = "Severity (1-4): "; write(STDOUT_FILENO, prompt, strlen(prompt));
+        br = read(STDIN_FILENO, input_buf, BUF_SIZE - 1);
+        if (br > 0) {
+            input_buf[br] = '\0';
+            nr.severity = atoi(input_buf);
+            if (nr.severity >= 1 && nr.severity <= 4) {
+                valid_sev = 1;
+            } else {
+                char *err = "Invalid severity! Must be 1, 2, 3 or 4.\n";
+                write(STDOUT_FILENO, err, strlen(err));
+            }
+        } else {
+            break;
+        }
+    }
 
     prompt = "Description: "; write(STDOUT_FILENO, prompt, strlen(prompt));
     br = read(STDIN_FILENO, input_buf, BUF_SIZE - 1);
@@ -168,7 +206,7 @@ void execute_add(const char *district, const char *user, const char *role) {
     write(fd, &nr, sizeof(Report));
     close(fd);
 
-    log_operation(district, user, role, "add");
+    notify_monitor(district, user, role);
 
     char cfg_path[256];
     snprintf(cfg_path, sizeof(cfg_path), "%s/district.cfg", district);
@@ -293,6 +331,27 @@ void execute_remove(const char *district, int target_id, const char *user, const
     close(fd);
 }
 
+void execute_remove_district(const char *district, const char *role) {
+    if (strcmp(role, "manager") != 0) {
+        char *err = "Error: Only manager can remove a district.\n";
+        write(STDERR_FILENO, err, strlen(err));
+        exit(-1);
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        char sym_path[256];
+        snprintf(sym_path, sizeof(sym_path), "active_reports-%s", district);
+        unlink(sym_path);
+        execlp("rm", "rm", "-rf", district, NULL);
+        exit(1);
+    } else if (pid > 0) {
+        wait(NULL);
+        char *ok = "District removed successfully\n";
+        write(STDOUT_FILENO, ok, strlen(ok));
+    }
+}
+
 void execute_update_threshold(const char *district, int new_limit, const char *user, const char *role) {
     if (strcmp(role, "manager") != 0) {
         char *err = "Error: Only manager can update threshold.\n";
@@ -363,6 +422,9 @@ int main(int argc, char *argv[]) {
     else if (strcmp(command, "remove") == 0 || strcmp(command, "remove_report") == 0) {
         if (cond_count > 0) execute_remove(district, atoi(conditions[0]), user, role);
     } 
+    else if (strcmp(command, "remove_district") == 0) {
+        execute_remove_district(district, role);
+    }
     else if (strcmp(command, "update-threshold") == 0) {
         if (cond_count > 0) execute_update_threshold(district, atoi(conditions[0]), user, role);
     } 
