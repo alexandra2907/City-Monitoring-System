@@ -338,6 +338,14 @@ void execute_remove_district(const char *district, const char *role) {
         exit(-1);
     }
 
+    if (strlen(district) == 0 || strcmp(district, "/") == 0 ||
+        strcmp(district, ".") == 0 || strcmp(district, "..") == 0 ||
+        strchr(district, '/') != NULL) {
+        char *err = "Error: Invalid district name. Protection triggered.\n";
+        write(STDERR_FILENO, err, strlen(err));
+        exit(-1);
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
         char sym_path[256];

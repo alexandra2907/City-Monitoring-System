@@ -8,16 +8,15 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+volatile sig_atomic_t keep_running = 1;
+
 void handle_sigusr1(int sig) {
     char *msg = "Monitor: New report has been added!\n";
     write(STDOUT_FILENO, msg, strlen(msg));
 }
 
 void handle_sigint(int sig) {
-    char *msg = "\nMonitor: Shutting down gracefully...\n";
-    write(STDOUT_FILENO, msg, strlen(msg));
-    unlink(".monitor_pid");
-    exit(0);
+    keep_running = 0;
 }
 
 int main() {
@@ -26,7 +25,7 @@ int main() {
     memset(&sa_usr1, 0, sizeof(sa_usr1));
     sa_usr1.sa_handler = handle_sigusr1;
     sigemptyset(&sa_usr1.sa_mask);
-    sa_usr1.sa_flags = 0;
+    sa_usr1.sa_flags = SA_RESTART;
     sigaction(SIGUSR1, &sa_usr1, NULL);
 
     memset(&sa_int, 0, sizeof(sa_int));
@@ -48,9 +47,13 @@ int main() {
     char *msg = "Monitor started. Waiting for signals... (Press Ctrl+C to stop)\n";
     write(STDOUT_FILENO, msg, strlen(msg));
 
-    while (1) {
-        pause(); 
+    while (keep_running) {
+        pause();
     }
+
+    char *exit_msg = "\nMonitor: Shutting down gracefully...\n";
+    write(STDOUT_FILENO, exit_msg, strlen(exit_msg));
+    unlink(".monitor_pid");
 
     return 0;
 }
